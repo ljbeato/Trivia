@@ -310,6 +310,11 @@ class Bank:
 
         return top[:k]
 
+# --- CACHED BANK LOADER (Prevents freezing & hanging) ---
+@st.cache_resource
+def load_bank(path):
+    return Bank(path)
+
 # --- SESSION STATE INITIALIZATION ---
 if 'game_state' not in st.session_state:
     st.session_state.game_state = 'WELCOME'
@@ -342,7 +347,7 @@ if st.session_state.game_state == 'WELCOME':
         try:
             if st.session_state.bank is None:
                 with st.spinner("Waiting for the Questions to Load..."):
-                    st.session_state.bank = Bank(excel_path)
+                    st.session_state.bank = load_bank(excel_path)
             
             st.success(f"Successfully loaded {len(st.session_state.bank.entries):,} questions from cloud storage!")
             
