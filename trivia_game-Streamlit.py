@@ -149,7 +149,7 @@ def infer_category(question):
     (top, best), (second, _) = scores[0], scores[1]
     return best if top >= 2 and top > second else "General"
 
-NUM_RE = re.compile(r"^([$£€]?)(\d[\d,]*\.?\d*\vert{}\.\d+)(\%?)$")
+NUM_RE = re.compile(r"^([$£€]?)(\d[\d,]*\.?\d*|\.\d+)(%?)$")
 BAD_Q = re.compile(r"\b(either|any of|name two|name three|name the two|following|above|below|picture|pictured)\b", re.I)
 BAD_A = re.compile(r"[;()\[\]{}:?\"]|\s/\s|\sor\s|\*")
 
@@ -261,36 +261,29 @@ class Bank:
         return steps
 
     def distractors(self, e, k=3):
-        """Advanced distractor generator: Strongly prioritizes answers from the exact same category
-        first, matching structural format (numbers/years/capitalization), and semantic overlap."""
         cand = []
         
-        # Tier 1: Same category & same shape/type
         same_cat_indices = self.by_cat["mc"].get(e.cat, [])
         for ci in same_cat_indices:
             c = self.entries[ci]
             if c.i != e.i and c.an != e.an and c.shape == e.shape:
                 cand.append(c)
 
-        # Tier 2: Same category, any shape
         for ci in same_cat_indices:
             c = self.entries[ci]
             if c not in cand and c.i != e.i and c.an != e.an:
                 cand.append(c)
 
-        # Tier 3: Same shape across any category
         same_shape_indices = self.by_shape.get(e.shape, [])
         for ci in same_shape_indices:
             c = self.entries[ci]
             if c not in cand and c.i != e.i and c.an != e.an:
                 cand.append(c)
 
-        # Tier 4: Global fallback pool
         for c in self.entries:
             if c.mc and c not in cand and c.i != e.i and c.an != e.an:
                 cand.append(c)
 
-        # Score candidates based on keyword overlap with the question and shape match
         scored = []
         for c in cand:
             keyword_overlap = len(e.toks & c.toks)
@@ -303,14 +296,12 @@ class Bank:
 
         top, picked_an = [], []
         for _, c in scored:
-            # Ensure high distinctness so incorrect answers aren't too close to the right answer
             if all(difflib.SequenceMatcher(None, c.an, p).ratio() < 0.75 for p in picked_an) and difflib.SequenceMatcher(None, c.an, e.an).ratio() < 0.75:
                 top.append(c.a)
                 picked_an.append(c.an)
             if len(top) >= k:
                 break
 
-        # Absolute fallback if pool is too tight
         while len(top) < k and cand:
             c = random.choice(cand)
             if c.a not in top and c.a != e.a:
@@ -494,4 +485,9 @@ elif st.session_state.game_state == 'FEEDBACK':
 
 elif st.session_state.game_state == 'GAMEOVER':
     st.markdown("<h1 class='gold-header'>GAME OVER</h1>", unsafe_allow_html=True)
-    st.markdown(f"<h1 style='text-align: center
+    st.markdown(f"<h1 style='text-align: center; font-size: 80px; color: #FBBF24;'>{st.session_state.score}</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center;'>Final Score</p>", unsafe_allow_html=True)
+    
+    if st.button("PLAY AGAIN", type="primary", use_container_width=True):
+        st.session_state.game_state = 'WELCOME'
+        st.rerun()
