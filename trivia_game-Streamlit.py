@@ -5,7 +5,6 @@ import os
 import math
 import re
 import difflib
-import time
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -38,12 +37,6 @@ st.markdown("""
         padding: 10px;
         border-radius: 8px;
         text-align: center;
-    }
-    .timer-box {
-        font-size: 20px;
-        font-weight: bold;
-        color: #EF4444;
-        text-align: right;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -156,7 +149,7 @@ def infer_category(question):
     (top, best), (second, _) = scores[0], scores[1]
     return best if top >= 2 and top > second else "General"
 
-NUM_RE = re.compile(r"^([$£€]?)(\d[\d,]*\.?\d*|\.\d+)(%?)$")
+NUM_RE = re.compile(r"^([$£€]?)(\d[\d,]*\.?\d*\vert{}\.\d+)(\%?)$")
 BAD_Q = re.compile(r"\b(either|any of|name two|name three|name the two|following|above|below|picture|pictured)\b", re.I)
 BAD_A = re.compile(r"[;()\[\]{}:?\"]|\s/\s|\sor\s|\*")
 
@@ -231,7 +224,7 @@ class Bank:
                     self.tok_index.setdefault(t, []).append(e.i)
             if e.fib:
                 self.by_cat["fib"].setdefault(e.cat, []).append(e.i)
-        self.cat_list = {k: [c for c, v in d.items() if len(v) >= 10] for k, d in self.by_cat.items()}
+        self.cat_list = {k: [c for c, v in d.items() if len(v) >= 5] for k, d in self.by_cat.items()}
         if not self.cat_list['mc']:
             self.cat_list = {k: list(d.keys()) for k, d in self.by_cat.items()}
 
@@ -268,42 +261,56 @@ class Bank:
         return steps
 
     def distractors(self, e, k=3):
+        """Advanced distractor generator: Strongly prioritizes answers from the exact same category
+        first, matching structural format (numbers/years/capitalization), and semantic overlap."""
         cand = []
+        
+        # Tier 1: Same category & same shape/type
         same_cat_indices = self.by_cat["mc"].get(e.cat, [])
         for ci in same_cat_indices:
             c = self.entries[ci]
-            if c.i != e.i and c.an != e.an:
+            if c.i != e.i and c.an != e.an and c.shape == e.shape:
                 cand.append(c)
 
-        if len(cand) < k * 3:
-            same_shape_indices = self.by_shape.get(e.shape, [])
-            for ci in same_shape_indices:
-                c = self.entries[ci]
-                if c not in cand and c.i != e.i and c.an != e.an:
-                    cand.append(c)
+        # Tier 2: Same category, any shape
+        for ci in same_cat_indices:
+            c = self.entries[ci]
+            if c not in cand and c.i != e.i and c.an != e.an:
+                cand.append(c)
 
-        if len(cand) < k * 3:
-            for c in self.entries:
-                if c.mc and c not in cand and c.i != e.i and c.an != e.an:
-                    cand.append(c)
+        # Tier 3: Same shape across any category
+        same_shape_indices = self.by_shape.get(e.shape, [])
+        for ci in same_shape_indices:
+            c = self.entries[ci]
+            if c not in cand and c.i != e.i and c.an != e.an:
+                cand.append(c)
 
+        # Tier 4: Global fallback pool
+        for c in self.entries:
+            if c.mc and c not in cand and c.i != e.i and c.an != e.an:
+                cand.append(c)
+
+        # Score candidates based on keyword overlap with the question and shape match
         scored = []
         for c in cand:
-            shape_match = 1.0 if c.shape == e.shape else 0.5
-            len_diff = abs(len(c.a) - len(e.a)) / max(len(c.a), len(e.a), 1)
-            score = shape_match * (1.0 - len_diff)
+            keyword_overlap = len(e.toks & c.toks)
+            shape_bonus = 2.0 if c.shape == e.shape else 0.0
+            cat_bonus = 3.0 if c.cat == e.cat else 0.0
+            score = cat_bonus + shape_bonus + (keyword_overlap * 0.5)
             scored.append((score, c))
 
         scored.sort(key=lambda x: -x[0])
 
         top, picked_an = [], []
         for _, c in scored:
-            if all(difflib.SequenceMatcher(None, c.an, p).ratio() < 0.85 for p in picked_an) and c.an not in picked_an:
+            # Ensure high distinctness so incorrect answers aren't too close to the right answer
+            if all(difflib.SequenceMatcher(None, c.an, p).ratio() < 0.75 for p in picked_an) and difflib.SequenceMatcher(None, c.an, e.an).ratio() < 0.75:
                 top.append(c.a)
                 picked_an.append(c.an)
             if len(top) >= k:
                 break
 
+        # Absolute fallback if pool is too tight
         while len(top) < k and cand:
             c = random.choice(cand)
             if c.a not in top and c.a != e.a:
@@ -322,7 +329,6 @@ if 'game_state' not in st.session_state:
     st.session_state.round_pts = 0
     st.session_state.report = {}
     st.session_state.feedback = None
-    st.session_state.timer_start = None
 
 # --- UI VIEWS ---
 
@@ -337,7 +343,6 @@ if st.session_state.game_state == 'WELCOME':
         st.markdown("* **Double Down:** After each round, risk your points or pass safely.")
         st.markdown("* **Round 4:** 4 Fill-in-the-blank questions (40 pts each).")
         st.markdown("* **Final Showdown:** Double your entire score or lose it all!")
-        st.markdown("* **Timer:** 20-second countdown for each question.")
         st.markdown("</div>", unsafe_allow_html=True)
         
     excel_path = "Trivia Questions.xlsx"
@@ -357,7 +362,6 @@ if st.session_state.game_state == 'WELCOME':
                 st.session_state.round_pts = 0
                 st.session_state.report = {}
                 st.session_state.game_state = 'PLAYING'
-                st.session_state.timer_start = time.time()
                 st.rerun()
         except Exception as e:
             st.error(f"Error loading workbook: {e}")
@@ -384,35 +388,11 @@ elif st.session_state.game_state == 'PLAYING':
         kind_name = "Multiple Choice" if st_item['kind'] == 'mc' else "Fill-in-the-Blank"
         st.markdown(f"<p style='text-align: center;'>{kind_name} • {st_item['pts']} Points per Question</p>", unsafe_allow_html=True)
         if st.button("Continue to Round", type="primary", use_container_width=True):
-            st.session_state.timer_start = time.time()
             st.rerun()
         st.stop()
 
-    # --- 20-SECOND COUNTDOWN TIMER LOGIC ---
-    if st.session_state.timer_start is None:
-        st.session_state.timer_start = time.time()
-        
-    elapsed = int(time.time() - st.session_state.timer_start)
-    time_left = max(0, 20 - elapsed)
+    st.markdown(f"**Category:** `{st_item['e'].cat.upper()}`")
     
-    col_t1, col_t2 = st.columns([3, 1])
-    with col_t1:
-        st.markdown(f"**Category:** `{st_item['e'].cat.upper()}`")
-    with col_t2:
-        st.markdown(f"<div class='timer-box'>⏳ {time_left}s</div>", unsafe_allow_html=True)
-
-    # Check if timer ran out
-    if time_left == 0:
-        st.session_state.feedback = {
-            'ok': False, 
-            'correct': st_item['e'].a, 
-            'chosen': 'Time Expired ⏰', 
-            'pts_text': 'Time ran out! +0 points'
-        }
-        st.session_state.game_state = 'FEEDBACK'
-        st.session_state.timer_start = None
-        st.rerun()
-
     if st_item['kind'] == 'mc':
         n = sum(1 for s in steps[:idx + 1] if s['kind'] == 'mc' and s['round'] == st_item['round'])
         st.markdown(f"### Round {st_item['round']} • Question {n}/{QUESTIONS_PER_ROUND} ({st_item['pts']} pts)")
@@ -426,7 +406,6 @@ elif st.session_state.game_state == 'PLAYING':
                     st.session_state.round_pts += st_item['pts']
                 st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': opt, 'pts': st_item['pts'] if ok else 0}
                 st.session_state.game_state = 'FEEDBACK'
-                st.session_state.timer_start = None
                 st.rerun()
 
     elif st_item['kind'] == 'fib' or st_item['kind'] == 'final':
@@ -458,7 +437,6 @@ elif st.session_state.game_state == 'PLAYING':
                         
                     st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': user_ans, 'pts_text': delta}
                     st.session_state.game_state = 'FEEDBACK'
-                    st.session_state.timer_start = None
                     st.rerun()
 
     elif st_item['kind'] == 'dd':
@@ -475,7 +453,6 @@ elif st.session_state.game_state == 'PLAYING':
                 st.session_state.report[st_item['round']] = f"Passed (kept {risk})"
                 st.session_state.feedback = {'ok': None, 'correct': st_item['e'].a, 'chosen': 'Passed', 'pts_text': f"Kept {risk} points"}
                 st.session_state.game_state = 'FEEDBACK'
-                st.session_state.timer_start = None
                 st.rerun()
             elif col2:
                 if not user_dd_ans.strip():
@@ -493,19 +470,14 @@ elif st.session_state.game_state == 'PLAYING':
                         delta = f"-{risk} points"
                     st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': user_dd_ans, 'pts_text': delta}
                     st.session_state.game_state = 'FEEDBACK'
-                    st.session_state.timer_start = None
                     st.rerun()
-
-    # Automatically refresh the page every 1 second so the timer counts down live
-    time.sleep(1)
-    st.rerun()
 
 elif st.session_state.game_state == 'FEEDBACK':
     fb = st.session_state.feedback
     if fb['ok'] is True:
         st.success("### Correct! 🎉")
     elif fb['ok'] is False:
-        st.error("### Time's Up / Not Quite! ❌")
+        st.error("### Not Quite! ❌")
     else:
         st.info("### Round Safe")
         
@@ -518,15 +490,8 @@ elif st.session_state.game_state == 'FEEDBACK':
     if st.button("Continue", type="primary", use_container_width=True):
         st.session_state.step_idx += 1
         st.session_state.game_state = 'PLAYING'
-        st.session_state.timer_start = time.time()
         st.rerun()
 
 elif st.session_state.game_state == 'GAMEOVER':
     st.markdown("<h1 class='gold-header'>GAME OVER</h1>", unsafe_allow_html=True)
-    st.markdown(f"<h1 style='text-align: center; font-size: 80px; color: #FBBF24;'>{st.session_state.score}</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center;'>Final Score</p>", unsafe_allow_html=True)
-    
-    if st.button("PLAY AGAIN", type="primary", use_container_width=True):
-        st.session_state.game_state = 'WELCOME'
-        st.session_state.timer_start = None
-        st.rerun()
+    st.markdown(f"<h1 style='text-align: center
