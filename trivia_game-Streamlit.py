@@ -5,8 +5,6 @@ import os
 import math
 import re
 import difflib
-import zlib
-from io import BytesIO
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -43,9 +41,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- CONFIGURATION (Copied from your logic) ---
+# --- CONFIGURATION ---
 SHEET_NAME = "Trivia"
-WORKBOOK_NAME = "Trivia Questions.xlsx"
 MC_ROUNDS = ((1, 5), (2, 10), (3, 20))
 FIB_ROUND = (4, 40)
 QUESTIONS_PER_ROUND = 4
@@ -152,7 +149,7 @@ def infer_category(question):
     (top, best), (second, _) = scores[0], scores[1]
     return best if top >= 2 and top > second else "General"
 
-NUM_RE = re.compile(r"^([$£€]?)(\d[\d,]*\.?\d*|\.\d+)(%?)$")
+NUM_RE = re.compile(r"^([$£€]?)(\d[\d,]*\.?\d*\vert{}\.\d+)(\%?)$")
 BAD_Q = re.compile(r"\b(either|any of|name two|name three|name the two|following|above|below|picture|pictured)\b", re.I)
 BAD_A = re.compile(r"[;()\[\]{}:?\"]|\s/\s|\sor\s|\*")
 
@@ -312,12 +309,15 @@ if st.session_state.game_state == 'WELCOME':
         st.markdown("* **Final Showdown:** Double your entire score or lose it all!")
         st.markdown("</div>", unsafe_allow_html=True)
         
-    uploaded_file = st.file_uploader("Upload your 'Trivia Questions.xlsx' file", type=["xlsx"])
+    excel_path = "Trivia Questions.xlsx"
     
-    if uploaded_file is not None:
+    if os.path.exists(excel_path):
         try:
-            st.session_state.bank = Bank(uploaded_file)
-            st.success(f"Successfully loaded {len(st.session_state.bank.entries):,} questions!")
+            if st.session_state.bank is None:
+                st.session_state.bank = Bank(excel_path)
+            
+            st.success(f"Successfully loaded {len(st.session_state.bank.entries):,} questions from cloud storage!")
+            
             if st.button("START GAME", type="primary", use_container_width=True):
                 st.session_state.steps = st.session_state.bank.new_game()
                 st.session_state.step_idx = 0
@@ -328,6 +328,8 @@ if st.session_state.game_state == 'WELCOME':
                 st.rerun()
         except Exception as e:
             st.error(f"Error loading workbook: {e}")
+    else:
+        st.error(f"Could not find '{excel_path}' in the repository. Please make sure it is uploaded to your GitHub folder alongside app.py.")
 
 elif st.session_state.game_state == 'PLAYING':
     steps = st.session_state.steps
@@ -340,45 +342,43 @@ elif st.session_state.game_state == 'PLAYING':
     st.sidebar.metric("Current Score", st.session_state.score)
     st.progress(idx / len(steps))
     
-    st = steps[idx]
+    st_item = steps[idx]
     
-    # Handle Round Intros
-    if st['first'] and st['kind'] in ('mc', 'fib') and 'intro_shown' not in st:
-        st['intro_shown'] = True
+    if st_item['first'] and st_item['kind'] in ('mc', 'fib') and 'intro_shown' not in st_item:
+        st_item['intro_shown'] = True
         st.session_state.round_pts = 0
-        st.markdown(f"<h1 class='gold-header'>ROUND {st['round']}</h1>", unsafe_allow_html=True)
-        kind_name = "Multiple Choice" if st['kind'] == 'mc' else "Fill-in-the-Blank"
-        st.markdown(f"<p style='text-align: center;'>{kind_name} • {st['pts']} Points per Question</p>", unsafe_allow_html=True)
+        st.markdown(f"<h1 class='gold-header'>ROUND {st_item['round']}</h1>", unsafe_allow_html=True)
+        kind_name = "Multiple Choice" if st_item['kind'] == 'mc' else "Fill-in-the-Blank"
+        st.markdown(f"<p style='text-align: center;'>{kind_name} • {st_item['pts']} Points per Question</p>", unsafe_allow_html=True)
         if st.button("Continue to Round", type="primary", use_container_width=True):
             st.rerun()
         st.stop()
 
-    # --- RENDER QUESTION TYPES ---
-    st.markdown(f"**Category:** `{st['e'].cat.upper()}`")
+    st.markdown(f"**Category:** `{st_item['e'].cat.upper()}`")
     
-    if st['kind'] == 'mc':
-        n = sum(1 for s in steps[:idx + 1] if s['kind'] == 'mc' and s['round'] == st['round'])
-        st.markdown(f"### Round {st['round']} • Question {n}/{QUESTIONS_PER_ROUND} ({st['pts']} pts)")
-        st.markdown(f"<div class='card'><h4>{st['e'].q}</h4></div>", unsafe_allow_html=True)
+    if st_item['kind'] == 'mc':
+        n = sum(1 for s in steps[:idx + 1] if s['kind'] == 'mc' and s['round'] == st_item['round'])
+        st.markdown(f"### Round {st_item['round']} • Question {n}/{QUESTIONS_PER_ROUND} ({st_item['pts']} pts)")
+        st.markdown(f"<div class='card'><h4>{st_item['e'].q}</h4></div>", unsafe_allow_html=True)
         
-        for opt in st['options']:
+        for opt in st_item['options']:
             if st.button(opt, use_container_width=True):
-                ok = (opt == st['e'].a)
+                ok = (opt == st_item['e'].a)
                 if ok:
-                    st.session_state.score += st['pts']
-                    st.session_state.round_pts += st['pts']
-                st.session_state.feedback = {'ok': ok, 'correct': st['e'].a, 'chosen': opt, 'pts': st['pts'] if ok else 0}
+                    st.session_state.score += st_item['pts']
+                    st.session_state.round_pts += st_item['pts']
+                st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': opt, 'pts': st_item['pts'] if ok else 0}
                 st.session_state.game_state = 'FEEDBACK'
                 st.rerun()
 
-    elif st['kind'] == 'fib' or st['kind'] == 'final':
-        is_final = (st['kind'] == 'final')
-        title = "FINAL SHOWDOWN" if is_final else f"Round 4 • Fill in the Blank ({st['pts']} pts)"
+    elif st_item['kind'] == 'fib' or st_item['kind'] == 'final':
+        is_final = (st_item['kind'] == 'final')
+        title = "FINAL SHOWDOWN" if is_final else f"Round 4 • Fill in the Blank ({st_item['pts']} pts)"
         st.markdown(f"### {title}")
         if is_final:
             st.warning(f"Everything on the line! Your current score: {st.session_state.score}")
             
-        st.markdown(f"<div class='card'><h4>{st['e'].q}</h4></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='card'><h4>{st_item['e'].q}</h4></div>", unsafe_allow_html=True)
         
         with st.form(key=f"fib_form_{idx}"):
             user_ans = st.text_input("Type your answer:")
@@ -387,79 +387,28 @@ elif st.session_state.game_state == 'PLAYING':
                 if not user_ans.strip():
                     st.warning("Please type an answer.")
                 else:
-                    ok = is_close(user_ans, st['e'].a, FIB_THRESHOLD)
+                    ok = is_close(user_ans, st_item['e'].a, FIB_THRESHOLD)
                     if is_final:
                         before = st.session_state.score
                         st.session_state.score = before * 2 if ok else 0
                         delta = f"Score doubled to {st.session_state.score}" if ok else "Score dropped to 0"
                     else:
                         if ok:
-                            st.session_state.score += st['pts']
-                            st.session_state.round_pts += st['pts']
-                        delta = f"+{st['pts']} points" if ok else "+0 points"
+                            st.session_state.score += st_item['pts']
+                            st.session_state.round_pts += st_item['pts']
+                        delta = f"+{st_item['pts']} points" if ok else "+0 points"
                         
-                    st.session_state.feedback = {'ok': ok, 'correct': st['e'].a, 'chosen': user_ans, 'pts_text': delta}
+                    st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': user_ans, 'pts_text': delta}
                     st.session_state.game_state = 'FEEDBACK'
                     st.rerun()
 
-    elif st['kind'] == 'dd':
+    elif st_item['kind'] == 'dd':
         risk = st.session_state.round_pts
-        st.markdown(f"### ⚡ DOUBLE DOWN (After Round {st['round']})")
+        st.markdown(f"### ⚡ DOUBLE DOWN (After Round {st_item['round']})")
         st.markdown(f"<div class='score-box'><b>Points at stake: {risk}</b><br>Right: +{risk} (Doubled) | Wrong: -{risk} | Pass: Keep points safe</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='card'><h4>{st['e'].q}</h4></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='card'><h4>{st_item['e'].q}</h4></div>", unsafe_allow_html=True)
         
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🛡️ PASS (Keep Safe)", use_container_width=True):
-                st.session_state.report[st['round']] = f"Passed (kept {risk})"
-                st.session_state.feedback = {'ok': None, 'correct': st['e'].a, 'chosen': 'Passed', 'pts_text': f"Kept {risk} points"}
-                st.session_state.game_state = 'FEEDBACK'
-                st.rerun()
-        with col2:
-            pass_dd = st.button("🔥 RISK IT (Double Down)", type="primary", use_container_width=True)
-            
-        user_dd_ans = st.text_input("Type your answer (Required if risking):")
-        if pass_dd:
-            if not user_dd_ans.strip():
-                st.warning("Type an answer to risk points, or click Pass.")
-            else:
-                ok = is_close(user_dd_ans, st['e'].a, DD_THRESHOLD)
-                rep = st.session_state.report.setdefault(st['round'], {})
-                if ok:
-                    st.session_state.score += risk
-                    delta = f"+{risk} bonus points"
-                else:
-                    st.session_state.score -= risk
-                    delta = f"-{risk} points"
-                st.session_state.feedback = {'ok': ok, 'correct': st['e'].a, 'chosen': user_dd_ans, 'pts_text': delta}
-                st.session_state.game_state = 'FEEDBACK'
-                st.rerun()
-
-elif st.session_state.game_state == 'FEEDBACK':
-    fb = st.session_state.feedback
-    if fb['ok'] is True:
-        st.success("### Correct! 🎉")
-    elif fb['ok'] is False:
-        st.error("### Not Quite! ❌")
-    else:
-        st.info("### Round Safe")
-        
-    st.markdown(f"**Correct Answer:** {fb['correct']}")
-    if 'chosen' in fb:
-        st.markdown(f"**Your Answer:** {fb['chosen']}")
-    if 'pts_text' in fb:
-        st.markdown(f"**Result:** {fb['pts_text']}")
-        
-    if st.button("Continue", type="primary", use_container_width=True):
-        st.session_state.step_idx += 1
-        st.session_state.game_state = 'PLAYING'
-        st.rerun()
-
-elif st.session_state.game_state == 'GAMEOVER':
-    st.markdown("<h1 class='gold-header'>GAME OVER</h1>", unsafe_allow_html=True)
-    st.markdown(f"<h1 style='text-align: center; font-size: 80px; color: #FBBF24;'>{st.session_state.score}</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center;'>Final Score</p>", unsafe_allow_html=True)
-    
-    if st.button("PLAY AGAIN", type="primary", use_container_width=True):
-        st.session_state.game_state = 'WELCOME'
-        st.rerun()
+                st.session_state.report[st_item['round']] = f"Passed (kept
