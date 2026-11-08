@@ -408,32 +408,32 @@ elif st.session_state.game_state == 'PLAYING':
         st.markdown(f"<div class='score-box'><b>Points at stake: {risk}</b><br>Right: +{risk} (Doubled) | Wrong: -{risk} | Pass: Keep points safe</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='card'><h4>{st_item['e'].q}</h4></div>", unsafe_allow_html=True)
         
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🛡️ PASS (Keep Safe)", use_container_width=True):
+        with st.form(key=f"dd_form_{idx}"):
+            user_dd_ans = st.text_input("Type your answer (required if risking):")
+            col1, col2 = st.form_submit_button("🛡️ PASS (Keep Safe)"), st.form_submit_button("🔥 RISK IT (Double Down)", type="primary")
+            
+            if col1: # Pass button
                 st.session_state.report[st_item['round']] = f"Passed (kept {risk})"
                 st.session_state.feedback = {'ok': None, 'correct': st_item['e'].a, 'chosen': 'Passed', 'pts_text': f"Kept {risk} points"}
                 st.session_state.game_state = 'FEEDBACK'
                 st.rerun()
-        with col2:
-            pass_dd = st.button("🔥 RISK IT (Double Down)", type="primary", use_container_width=True)
-            
-        user_dd_ans = st.text_input("Type your answer (Required if risking):")
-        if pass_dd:
-            if not user_dd_ans.strip():
-                st.warning("Type an answer to risk points, or click Pass.")
-            else:
-                ok = is_close(user_dd_ans, st_item['e'].a, DD_THRESHOLD)
-                rep = st.session_state.report.setdefault(st_item['round'], {})
-                if ok:
-                    st.session_state.score += risk
-                    delta = f"+{risk} bonus points"
+            elif col2: # Risk button
+                if not user_dd_ans.strip():
+                    st.warning("Type an answer to risk points, or click Pass.")
                 else:
-                    st.session_state.score -= risk
-                    delta = f"-{risk} points"
-                st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': user_dd_ans, 'pts_text': delta}
-                st.session_state.game_state = 'FEEDBACK'
-                st.rerun()
+                    ok = is_close(user_dd_ans, st_item['e'].a, DD_THRESHOLD)
+                    rep = st.session_state.report.setdefault(st_item['round'], {})
+                    if ok:
+                        st.session_state.score += risk
+                        rep['dd'] = f"Doubled! +{risk}"
+                        delta = f"+{risk} bonus points"
+                    else:
+                        st.session_state.score -= risk
+                        rep['dd'] = f"Missed, lost {risk}"
+                        delta = f"-{risk} points"
+                    st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': user_dd_ans, 'pts_text': delta}
+                    st.session_state.game_state = 'FEEDBACK'
+                    st.rerun()
 
 elif st.session_state.game_state == 'FEEDBACK':
     fb = st.session_state.feedback
