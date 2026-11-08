@@ -149,7 +149,7 @@ def infer_category(question):
     (top, best), (second, _) = scores[0], scores[1]
     return best if top >= 2 and top > second else "General"
 
-NUM_RE = re.compile(r"^([$£€]?)(\d[\d,]*\.?\d*\vert{}\.\d+)(\%?)$")
+NUM_RE = re.compile(r"^([$£€]?)(\d[\d,]*\.?\d*|\.\d+)(%?)$")
 BAD_Q = re.compile(r"\b(either|any of|name two|name three|name the two|following|above|below|picture|pictured)\b", re.I)
 BAD_A = re.compile(r"[;()\[\]{}:?\"]|\s/\s|\sor\s|\*")
 
@@ -411,4 +411,55 @@ elif st.session_state.game_state == 'PLAYING':
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🛡️ PASS (Keep Safe)", use_container_width=True):
-                st.session_state.report[st_item['round']] = f"Passed (kept
+                st.session_state.report[st_item['round']] = f"Passed (kept {risk})"
+                st.session_state.feedback = {'ok': None, 'correct': st_item['e'].a, 'chosen': 'Passed', 'pts_text': f"Kept {risk} points"}
+                st.session_state.game_state = 'FEEDBACK'
+                st.rerun()
+        with col2:
+            pass_dd = st.button("🔥 RISK IT (Double Down)", type="primary", use_container_width=True)
+            
+        user_dd_ans = st.text_input("Type your answer (Required if risking):")
+        if pass_dd:
+            if not user_dd_ans.strip():
+                st.warning("Type an answer to risk points, or click Pass.")
+            else:
+                ok = is_close(user_dd_ans, st_item['e'].a, DD_THRESHOLD)
+                rep = st.session_state.report.setdefault(st_item['round'], {})
+                if ok:
+                    st.session_state.score += risk
+                    delta = f"+{risk} bonus points"
+                else:
+                    st.session_state.score -= risk
+                    delta = f"-{risk} points"
+                st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': user_dd_ans, 'pts_text': delta}
+                st.session_state.game_state = 'FEEDBACK'
+                st.rerun()
+
+elif st.session_state.game_state == 'FEEDBACK':
+    fb = st.session_state.feedback
+    if fb['ok'] is True:
+        st.success("### Correct! 🎉")
+    elif fb['ok'] is False:
+        st.error("### Not Quite! ❌")
+    else:
+        st.info("### Round Safe")
+        
+    st.markdown(f"**Correct Answer:** {fb['correct']}")
+    if 'chosen' in fb:
+        st.markdown(f"**Your Answer:** {fb['chosen']}")
+    if 'pts_text' in fb:
+        st.markdown(f"**Result:** {fb['pts_text']}")
+        
+    if st.button("Continue", type="primary", use_container_width=True):
+        st.session_state.step_idx += 1
+        st.session_state.game_state = 'PLAYING'
+        st.rerun()
+
+elif st.session_state.game_state == 'GAMEOVER':
+    st.markdown("<h1 class='gold-header'>GAME OVER</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='text-align: center; font-size: 80px; color: #FBBF24;'>{st.session_state.score}</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center;'>Final Score</p>", unsafe_allow_html=True)
+    
+    if st.button("PLAY AGAIN", type="primary", use_container_width=True):
+        st.session_state.game_state = 'WELCOME'
+        st.rerun()
