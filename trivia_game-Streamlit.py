@@ -310,7 +310,7 @@ class Bank:
 
         return top[:k]
 
-# --- CACHED BANK LOADER (Prevents freezing & hanging) ---
+# --- CACHED BANK LOADER (Loads instantly after the first time) ---
 @st.cache_resource
 def load_bank(path):
     return Bank(path)
