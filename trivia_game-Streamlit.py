@@ -261,27 +261,58 @@ class Bank:
         return steps
 
     def distractors(self, e, k=3):
-        cand = set()
-        for t in e.toks:
-            lst = self.tok_index.get(t)
-            if lst:
-                cand.update(lst if len(lst) <= 40 else random.sample(lst, 40))
-        same_cat = self.by_cat["mc"].get(e.cat, [])
-        cand.update(random.sample(same_cat, min(250, len(same_cat))))
-        cand.discard(e.i)
-        top, picked_an = [], []
-        for ci in cand:
+        """Enhanced distractor generation: Prioritizes answers from the same category
+        and matching shape/length to ensure plausible, contextually relevant options."""
+        cand = []
+        
+        # 1. Prioritize answers from the exact same category first
+        same_cat_indices = self.by_cat["mc"].get(e.cat, [])
+        for ci in same_cat_indices:
             c = self.entries[ci]
-            if c.shape != e.shape or c.an in picked_an or c.an == e.an:
-                continue
-            top.append(c.a)
-            picked_an.append(c.an)
-            if len(top) >= 8:
+            if c.i != e.i and c.an != e.an:
+                cand.append(c)
+
+        # 2. If we need more candidates, pull from answers sharing the same shape/type
+        if len(cand) < k * 3:
+            same_shape_indices = self.by_shape.get(e.shape, [])
+            for ci in same_shape_indices:
+                c = self.entries[ci]
+                if c not in cand and c.i != e.i and c.an != e.an:
+                    cand.append(c)
+
+        # 3. Fallback to all multiple-choice entries if still needed
+        if len(cand) < k * 3:
+            for c in self.entries:
+                if c.mc and c not in cand and c.i != e.i and c.an != e.an:
+                    cand.append(c)
+
+        # Score and sort candidates based on similarity of length and character ratios
+        scored = []
+        for c in cand:
+            # Prefer similar length and matching shape
+            shape_match = 1.0 if c.shape == e.shape else 0.5
+            len_diff = abs(len(c.a) - len(e.a)) / max(len(c.a), len(e.a), 1)
+            score = shape_match * (1.0 - len_diff)
+            scored.append((score, c))
+
+        scored.sort(key=lambda x: -x[0])
+
+        top, picked_an = [], []
+        for _, c in scored:
+            if all(difflib.SequenceMatcher(None, c.an, p).ratio() < 0.85 for p in picked_an) and c.an not in picked_an:
+                top.append(c.a)
+                picked_an.append(c.an)
+            if len(top) >= k:
                 break
-        out = random.sample(top, min(k, len(top)))
-        while len(out) < k:
-            out.append("Alternative " + str(random.randint(10, 99)))
-        return out
+
+        # If we still need any, pull random from the candidate pool without generic placeholders
+        while len(top) < k and cand:
+            c = random.choice(cand)
+            if c.a not in top and c.a != e.a:
+                top.append(c.a)
+                picked_an.append(c.an)
+
+        return top[:k]
 
 # --- SESSION STATE INITIALIZATION ---
 if 'game_state' not in st.session_state:
