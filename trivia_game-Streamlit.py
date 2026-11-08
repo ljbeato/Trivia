@@ -250,14 +250,14 @@ class Bank:
                 opts = [e.a] + self.distractors(e, 3)
                 random.shuffle(opts)
                 steps.append({'kind': 'mc', 'round': rnd, 'pts': pts, 'e': e, 'options': opts, 'first': (n == 0)})
-            steps.append({'kind': 'dd', 'round': rnd, 'pts': 0, 'e': self._draw("fib", used), 'pic': (rnd == pic_round)})
+            steps.append({'kind': 'dd', 'round': rnd, 'pts': 0, 'e': self._draw("fib", used), 'pic': (rnd == pic_round), 'first': False})
         rnd, pts = FIB_ROUND
         cats = set()
         for n in range(QUESTIONS_PER_ROUND):
             e = self._draw("fib", used, cats)
             cats.add(e.cat)
             steps.append({'kind': 'fib', 'round': rnd, 'pts': pts, 'e': e, 'first': (n == 0), 'threshold': FIB_THRESHOLD})
-        steps.append({'kind': 'final', 'round': 5, 'pts': 0, 'e': self._draw("fib", used)})
+        steps.append({'kind': 'final', 'round': 5, 'pts': 0, 'e': self._draw("fib", used), 'first': False})
         return steps
 
     def distractors(self, e, k=3):
