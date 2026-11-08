@@ -5,7 +5,6 @@ import os
 import math
 import re
 import difflib
-import time
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -38,12 +37,6 @@ st.markdown("""
         padding: 10px;
         border-radius: 8px;
         text-align: center;
-    }
-    .timer-box {
-        font-size: 20px;
-        font-weight: bold;
-        color: #EF4444;
-        text-align: right;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -268,13 +261,18 @@ class Bank:
         return steps
 
     def distractors(self, e, k=3):
+        """Enhanced distractor generation: Prioritizes answers from the same category
+        and matching shape/length to ensure plausible, contextually relevant options."""
         cand = []
+        
+        # 1. Prioritize answers from the exact same category first
         same_cat_indices = self.by_cat["mc"].get(e.cat, [])
         for ci in same_cat_indices:
             c = self.entries[ci]
             if c.i != e.i and c.an != e.an:
                 cand.append(c)
 
+        # 2. If we need more candidates, pull from answers sharing the same shape/type
         if len(cand) < k * 3:
             same_shape_indices = self.by_shape.get(e.shape, [])
             for ci in same_shape_indices:
@@ -282,13 +280,16 @@ class Bank:
                 if c not in cand and c.i != e.i and c.an != e.an:
                     cand.append(c)
 
+        # 3. Fallback to all multiple-choice entries if still needed
         if len(cand) < k * 3:
             for c in self.entries:
                 if c.mc and c not in cand and c.i != e.i and c.an != e.an:
                     cand.append(c)
 
+        # Score and sort candidates based on similarity of length and character ratios
         scored = []
         for c in cand:
+            # Prefer similar length and matching shape
             shape_match = 1.0 if c.shape == e.shape else 0.5
             len_diff = abs(len(c.a) - len(e.a)) / max(len(c.a), len(e.a), 1)
             score = shape_match * (1.0 - len_diff)
@@ -304,6 +305,7 @@ class Bank:
             if len(top) >= k:
                 break
 
+        # If we still need any, pull random from the candidate pool without generic placeholders
         while len(top) < k and cand:
             c = random.choice(cand)
             if c.a not in top and c.a != e.a:
@@ -322,7 +324,6 @@ if 'game_state' not in st.session_state:
     st.session_state.round_pts = 0
     st.session_state.report = {}
     st.session_state.feedback = None
-    st.session_state.timer_start = None
 
 # --- UI VIEWS ---
 
@@ -337,7 +338,6 @@ if st.session_state.game_state == 'WELCOME':
         st.markdown("* **Double Down:** After each round, risk your points or pass safely.")
         st.markdown("* **Round 4:** 4 Fill-in-the-blank questions (40 pts each).")
         st.markdown("* **Final Showdown:** Double your entire score or lose it all!")
-        st.markdown("* **Timer:** 20-second countdown for each question.")
         st.markdown("</div>", unsafe_allow_html=True)
         
     excel_path = "Trivia Questions.xlsx"
@@ -345,8 +345,7 @@ if st.session_state.game_state == 'WELCOME':
     if os.path.exists(excel_path):
         try:
             if st.session_state.bank is None:
-                with st.spinner("Waiting for the Questions to Load..."):
-                    st.session_state.bank = Bank(excel_path)
+                st.session_state.bank = Bank(excel_path)
             
             st.success(f"Successfully loaded {len(st.session_state.bank.entries):,} questions from cloud storage!")
             
@@ -357,7 +356,6 @@ if st.session_state.game_state == 'WELCOME':
                 st.session_state.round_pts = 0
                 st.session_state.report = {}
                 st.session_state.game_state = 'PLAYING'
-                st.session_state.timer_start = time.time()
                 st.rerun()
         except Exception as e:
             st.error(f"Error loading workbook: {e}")
@@ -384,35 +382,11 @@ elif st.session_state.game_state == 'PLAYING':
         kind_name = "Multiple Choice" if st_item['kind'] == 'mc' else "Fill-in-the-Blank"
         st.markdown(f"<p style='text-align: center;'>{kind_name} • {st_item['pts']} Points per Question</p>", unsafe_allow_html=True)
         if st.button("Continue to Round", type="primary", use_container_width=True):
-            st.session_state.timer_start = time.time()
             st.rerun()
         st.stop()
 
-    # --- 20-SECOND COUNTDOWN TIMER LOGIC ---
-    if st.session_state.timer_start is None:
-        st.session_state.timer_start = time.time()
-        
-    elapsed = int(time.time() - st.session_state.timer_start)
-    time_left = max(0, 20 - elapsed)
+    st.markdown(f"**Category:** `{st_item['e'].cat.upper()}`")
     
-    col_t1, col_t2 = st.columns([3, 1])
-    with col_t1:
-        st.markdown(f"**Category:** `{st_item['e'].cat.upper()}`")
-    with col_t2:
-        st.markdown(f"<div class='timer-box'>⏳ {time_left}s</div>", unsafe_allow_html=True)
-
-    # Check if timer ran out
-    if time_left == 0:
-        st.session_state.feedback = {
-            'ok': False, 
-            'correct': st_item['e'].a, 
-            'chosen': 'Time Expired ⏰', 
-            'pts_text': 'Time ran out! +0 points'
-        }
-        st.session_state.game_state = 'FEEDBACK'
-        st.session_state.timer_start = None
-        st.rerun()
-
     if st_item['kind'] == 'mc':
         n = sum(1 for s in steps[:idx + 1] if s['kind'] == 'mc' and s['round'] == st_item['round'])
         st.markdown(f"### Round {st_item['round']} • Question {n}/{QUESTIONS_PER_ROUND} ({st_item['pts']} pts)")
@@ -426,7 +400,6 @@ elif st.session_state.game_state == 'PLAYING':
                     st.session_state.round_pts += st_item['pts']
                 st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': opt, 'pts': st_item['pts'] if ok else 0}
                 st.session_state.game_state = 'FEEDBACK'
-                st.session_state.timer_start = None
                 st.rerun()
 
     elif st_item['kind'] == 'fib' or st_item['kind'] == 'final':
@@ -458,7 +431,6 @@ elif st.session_state.game_state == 'PLAYING':
                         
                     st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': user_ans, 'pts_text': delta}
                     st.session_state.game_state = 'FEEDBACK'
-                    st.session_state.timer_start = None
                     st.rerun()
 
     elif st_item['kind'] == 'dd':
@@ -471,13 +443,12 @@ elif st.session_state.game_state == 'PLAYING':
             user_dd_ans = st.text_input("Type your answer (required if risking):")
             col1, col2 = st.form_submit_button("🛡️ PASS (Keep Safe)"), st.form_submit_button("🔥 RISK IT (Double Down)", type="primary")
             
-            if col1:
+            if col1: # Pass button
                 st.session_state.report[st_item['round']] = f"Passed (kept {risk})"
                 st.session_state.feedback = {'ok': None, 'correct': st_item['e'].a, 'chosen': 'Passed', 'pts_text': f"Kept {risk} points"}
                 st.session_state.game_state = 'FEEDBACK'
-                st.session_state.timer_start = None
                 st.rerun()
-            elif col2:
+            elif col2: # Risk button
                 if not user_dd_ans.strip():
                     st.warning("Type an answer to risk points, or click Pass.")
                 else:
@@ -493,19 +464,14 @@ elif st.session_state.game_state == 'PLAYING':
                         delta = f"-{risk} points"
                     st.session_state.feedback = {'ok': ok, 'correct': st_item['e'].a, 'chosen': user_dd_ans, 'pts_text': delta}
                     st.session_state.game_state = 'FEEDBACK'
-                    st.session_state.timer_start = None
                     st.rerun()
-
-    # Automatically refresh the page every 1 second so the timer counts down live
-    time.sleep(1)
-    st.rerun()
 
 elif st.session_state.game_state == 'FEEDBACK':
     fb = st.session_state.feedback
     if fb['ok'] is True:
         st.success("### Correct! 🎉")
     elif fb['ok'] is False:
-        st.error("### Time's Up / Not Quite! ❌")
+        st.error("### Not Quite! ❌")
     else:
         st.info("### Round Safe")
         
@@ -518,7 +484,6 @@ elif st.session_state.game_state == 'FEEDBACK':
     if st.button("Continue", type="primary", use_container_width=True):
         st.session_state.step_idx += 1
         st.session_state.game_state = 'PLAYING'
-        st.session_state.timer_start = time.time()
         st.rerun()
 
 elif st.session_state.game_state == 'GAMEOVER':
@@ -528,5 +493,4 @@ elif st.session_state.game_state == 'GAMEOVER':
     
     if st.button("PLAY AGAIN", type="primary", use_container_width=True):
         st.session_state.game_state = 'WELCOME'
-        st.session_state.timer_start = None
         st.rerun()
